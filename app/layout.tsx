@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+// VERSION: 0.1.1 - Loop Fix + Mobile Optimization
 import { Inter, Outfit } from "next/font/google";
 import "./globals.css";
 import LayoutWithNav from "@/components/LayoutWithNav";
