@@ -95,19 +95,7 @@ export function POS() {
             const netProfit = grossProfit - discountValue - rawShipping;
 
             await runTransaction(firestore, async (transaction) => {
-                // 1. Create Transaction Record
-                const newTxRef = doc(transactionsCol);
-                transaction.set(newTxRef, {
-                    date: serverTimestamp(),
-                    total,
-                    profit: netProfit,
-                    discount: discountValue,
-                    shipping: rawShipping,
-                    items: cart,
-                    userEmail: user.email
-                });
-
-                // 2. Update Stocks
+                // 1. Update Stocks (Leituras devem vir antes das Escritas)
                 for (const cartItem of cart) {
                     if (cartItem.id) {
                         const itemRef = doc(itemsCol, cartItem.id);
@@ -119,6 +107,18 @@ export function POS() {
                         }
                     }
                 }
+
+                // 2. Create Transaction Record (Escrita final)
+                const newTxRef = doc(transactionsCol);
+                transaction.set(newTxRef, {
+                    date: serverTimestamp(),
+                    total,
+                    profit: netProfit,
+                    discount: discountValue,
+                    shipping: rawShipping,
+                    items: cart,
+                    userEmail: user.email
+                });
             });
 
             setCart([]);
