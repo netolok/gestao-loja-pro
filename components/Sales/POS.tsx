@@ -95,20 +95,29 @@ export function POS() {
             const netProfit = grossProfit - discountValue - rawShipping;
 
             await runTransaction(firestore, async (transaction) => {
-                // 1. Update Stocks (Leituras devem vir antes das Escritas)
+                // 1. Reads (must come before writes)
+                const itemReads: { ref: any, cartItem: CartItem }[] = [];
                 for (const cartItem of cart) {
                     if (cartItem.id) {
                         const itemRef = doc(itemsCol, cartItem.id);
-                        const itemDoc = await transaction.get(itemRef);
-                        if (itemDoc.exists()) {
-                            const currentStock = itemDoc.data().quantity || 0;
-                            const newStock = Math.max(0, currentStock - cartItem.quantity);
-                            transaction.update(itemRef, { quantity: newStock });
-                        }
+                        itemReads.push({ ref: itemRef, cartItem });
                     }
                 }
 
-                // 2. Create Transaction Record (Escrita final)
+                const itemDocs = await Promise.all(itemReads.map(i => transaction.get(i.ref)));
+
+                // 2. Writes
+                itemDocs.forEach((docSnap, index) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data() as Item;
+                        const currentStock = data.quantity || 0;
+                        const cartItem = itemReads[index].cartItem;
+                        const newStock = Math.max(0, currentStock - cartItem.quantity);
+                        transaction.update(itemReads[index].ref, { quantity: newStock });
+                    }
+                });
+
+                // 3. Create Transaction Record
                 const newTxRef = doc(transactionsCol);
                 transaction.set(newTxRef, {
                     date: serverTimestamp(),

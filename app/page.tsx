@@ -265,7 +265,7 @@ export default function Home() {
                 </svg>
               </div>
               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-6">Projeção (30d)</h3>
-              <div className="text-4xl font-bold text-white mb-2">$ {prediction?.nextMonth.toFixed(2)}</div>
+              <div className="text-4xl font-bold text-indigo-400 mb-2">$ {prediction?.nextMonth.toFixed(2)}</div>
               <p className="text-sm text-slate-400 leading-relaxed">{prediction?.message}</p>
             </div>
 
