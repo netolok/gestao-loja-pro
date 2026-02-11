@@ -19,6 +19,9 @@ export interface Item {
     userEmail?: string;
     brandName?: string;
     lowStockThreshold?: number;
+    type?: 'unit' | 'perfume'; // New: Product Type
+    volumeML?: number; // New: Total volume per unit (e.g., 100ml)
+    residualVolume?: number; // New: Volume remaining in open bottles
 }
 
 export interface Brand {
@@ -29,6 +32,9 @@ export interface Brand {
 
 export interface CartItem extends Item {
     quantity: number;
+    isDecant?: boolean; // New: Is this a decant sale?
+    volumeSold?: number; // New: Amount of mL sold in this line item
+    originalPrice?: number; // To track overrides
 }
 
 export interface Transaction {

@@ -11,16 +11,13 @@ import { db as firestore } from '../../lib/firebase';
 
 export function POS() {
     const { user } = useAuth();
+    // State
+    const [cart, setCart] = useState<CartItem[]>([]);
+    const [isCheckingOut, setIsCheckingOut] = useState(false);
+    const [discount, setDiscount] = useState('');
+    const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
+    const [shippingCost, setShippingCost] = useState('');
     const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
-
-    // Filter items by user (Firestore)
-    const itemsQuery = user ? query(itemsCol, where('userEmail', '==', user.email)) : null;
-    const [itemsSnap, loadingItems] = useCollection(itemsQuery);
-
-    const itemsRaw = itemsSnap ? itemsSnap.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id
-    })) as Item[] : [];
 
     // Fetch brands for filtering (Firestore)
     const brandsQuery = user ? query(brandsCol, where('userEmail', '==', user.email)) : null;
@@ -31,41 +28,107 @@ export function POS() {
         id: doc.id
     })) as any[] : [];
 
+    // Fetch Items where user matches
+    const itemsQuery = user ? query(itemsCol, where('userEmail', '==', user.email)) : null;
+    const [itemsSnap, loadingItems] = useCollection(itemsQuery);
+
+    const itemsRaw = itemsSnap ? itemsSnap.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id
+    })) as Item[] : [];
+
     const items = itemsRaw ? (selectedBrand ? itemsRaw.filter(i => i.brandName === selectedBrand) : itemsRaw) : [];
 
-    const [cart, setCart] = useState<CartItem[]>([]);
-    const [isCheckingOut, setIsCheckingOut] = useState(false);
-    const [discount, setDiscount] = useState('');
-    const [discountType, setDiscountType] = useState<'fixed' | 'percent'>('fixed');
-    const [shippingCost, setShippingCost] = useState(''); // New state for shipping
+    // State for Decant Modal
+    const [decantModalOpen, setDecantModalOpen] = useState(false);
+    const [isVisible, setIsVisible] = useState(false); // Controls opacity/scale
+    const [selectedPerfume, setSelectedPerfume] = useState<Item | null>(null);
+    const [decantVolume, setDecantVolume] = useState('');
+    const [decantPrice, setDecantPrice] = useState('');
+
+    const handleItemClick = (item: Item) => {
+        if (item.type === 'perfume') {
+            setSelectedPerfume(item);
+            setDecantModalOpen(true);
+            // Trigger enter animation after mount
+            requestAnimationFrame(() => {
+                setIsVisible(true);
+            });
+            setDecantVolume('10'); // Default 10ml
+            setDecantPrice('');
+        } else {
+            addToCart(item);
+        }
+    };
+
+    const closeModal = () => {
+        setIsVisible(false); // Trigger exit animation
+        setTimeout(() => {
+            setDecantModalOpen(false);
+            setSelectedPerfume(null);
+        }, 300); // Wait for transition
+    };
+
+    const handleAddDecant = () => {
+        if (!selectedPerfume) return;
+        const vol = parseFloat(decantVolume);
+        const price = parseFloat(decantPrice);
+
+        if (!vol || !price) {
+            alert("Preencha volume e preço.");
+            return;
+        }
+
+        // Check stock availability for decant
+        // Total available mL = (quantity * volumeML) + (residualVolume || 0)
+        const totalAvailableML = (selectedPerfume.quantity * (selectedPerfume.volumeML || 0)) + (selectedPerfume.residualVolume || 0);
+
+        if (vol > totalAvailableML) {
+            alert(`Volume insuficiente! Disponível: ${totalAvailableML} mL`);
+            return;
+        }
+
+        const costPerML = selectedPerfume.cost / (selectedPerfume.volumeML || 1);
+        const decantCost = costPerML * vol;
+
+        const cartItem: CartItem = {
+            ...selectedPerfume,
+            id: selectedPerfume.id, // Ensure ID is passed
+            name: `${selectedPerfume.name} (${vol}mL)`,
+            price: price,
+            cost: decantCost,
+            quantity: 1, // Decants are usually unique lines
+            isDecant: true,
+            volumeSold: vol,
+            originalPrice: price
+        };
+
+        setCart(prev => [...prev, cartItem]);
+        closeModal();
+    };
 
     const addToCart = (item: Item) => {
         const stock = item.quantity || 0;
         setCart(prev => {
-            const existing = prev.find(i => i.id === item.id);
+            // If item is already in cart (and not a custom decant), increment qty
+            const existing = prev.find(i => i.id === item.id && !i.isDecant);
             const currentQtyInCart = existing ? existing.quantity : 0;
 
-            // Check stock limit
+            // Check stock limit (simple check for units)
             if (currentQtyInCart + 1 > stock) {
                 alert(`Estoque insuficiente! Apenas ${stock} unidades disponíveis.`);
                 return prev;
             }
 
             if (existing) {
-                return prev.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
+                return prev.map(i => i.id === item.id && !i.isDecant ? { ...i, quantity: i.quantity + 1 } : i);
             }
-            return [...prev, { ...item, quantity: 1 }];
+            return [...prev, { ...item, quantity: 1, isDecant: false }];
         });
     };
 
-    const removeFromCart = (itemId: string) => {
-        setCart(prev => {
-            const existing = prev.find(i => i.id === itemId);
-            if (existing && existing.quantity > 1) {
-                return prev.map(i => i.id === itemId ? { ...i, quantity: i.quantity - 1 } : i);
-            }
-            return prev.filter(i => i.id !== itemId);
-        });
+    const removeFromCart = (index: number) => {
+        setCart(prev => prev.filter((_, i) => i !== index));
     };
 
     const subtotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
@@ -95,7 +158,7 @@ export function POS() {
             const netProfit = grossProfit - discountValue - rawShipping;
 
             await runTransaction(firestore, async (transaction) => {
-                // 1. Reads (must come before writes)
+                // 1. Reads
                 const itemReads: { ref: any, cartItem: CartItem }[] = [];
                 for (const cartItem of cart) {
                     if (cartItem.id) {
@@ -110,10 +173,54 @@ export function POS() {
                 itemDocs.forEach((docSnap, index) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data() as Item;
-                        const currentStock = data.quantity || 0;
                         const cartItem = itemReads[index].cartItem;
-                        const newStock = Math.max(0, currentStock - cartItem.quantity);
-                        transaction.update(itemReads[index].ref, { quantity: newStock });
+
+                        if (cartItem.isDecant && cartItem.volumeSold) {
+                            // Decant Logic
+                            let remainingToDeduct = cartItem.volumeSold;
+                            let newResidual = data.residualVolume || 0;
+                            let newQuantity = data.quantity;
+
+                            // First take from residual
+                            if (newResidual >= remainingToDeduct) {
+                                newResidual -= remainingToDeduct;
+                                remainingToDeduct = 0;
+                            } else {
+                                // Consume all residual
+                                remainingToDeduct -= newResidual;
+                                newResidual = 0;
+
+                                // Open new bottles
+                                while (remainingToDeduct > 0 && newQuantity > 0) {
+                                    newQuantity--;
+                                    // Open bottle: add its volume to residual, then deduct
+                                    const bottleVol = data.volumeML || 100; // Default 100 if missing
+                                    if (remainingToDeduct >= bottleVol) {
+                                        // This shouldn't usually happen for a single decant unless huge volume
+                                        // But if logical: consume whole bottle
+                                        remainingToDeduct -= bottleVol;
+                                    } else {
+                                        // Open bottle, take what's needed, leave rest in residual
+                                        newResidual = bottleVol - remainingToDeduct;
+                                        remainingToDeduct = 0;
+                                    }
+                                }
+                            }
+
+                            // Safety clamp
+                            if (newQuantity < 0) newQuantity = 0;
+
+                            transaction.update(itemReads[index].ref, {
+                                quantity: newQuantity,
+                                residualVolume: newResidual
+                            });
+
+                        } else {
+                            // Unit Logic
+                            const currentStock = data.quantity || 0;
+                            const newStock = Math.max(0, currentStock - cartItem.quantity);
+                            transaction.update(itemReads[index].ref, { quantity: newStock });
+                        }
                     }
                 });
 
@@ -147,19 +254,87 @@ export function POS() {
 
     return (
         <div className="flex flex-col lg:flex-row gap-6 h-full min-h-[60vh] relative">
-            {/* Mobile View Cart Button */}
-            {totalItems > 0 && (
-                <div className="lg:hidden fixed bottom-6 right-6 z-40">
-                    <button
-                        onClick={() => {
-                            const cartEl = document.getElementById('cart-section');
-                            cartEl?.scrollIntoView({ behavior: 'smooth' });
-                        }}
-                        className="bg-indigo-600 text-white px-6 py-3 rounded-full font-bold shadow-2xl flex items-center gap-2 animate-bounce hover:animate-none active:scale-95 transition-all"
+            {/* Mobile View Cart Button and Item Grid... (Items Grid logic needs update for onClick) */}
+
+            {/* Decant Modal */}
+            {decantModalOpen && selectedPerfume && (
+                <div className={`fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 transition-opacity duration-300 ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
+                    <div
+                        className={`bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm transition-all duration-300 transform ${isVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}
+                        onClick={(e) => e.stopPropagation()}
                     >
-                        <span>🛒 Ver Carrinho</span>
-                        <span className="bg-white/20 px-2 rounded-lg text-xs">{totalItems}</span>
-                    </button>
+                        <h3 className="text-xl font-bold text-slate-800 mb-1">{selectedPerfume.name}</h3>
+                        <p className="text-sm text-slate-500 mb-6">Selecione o tipo de venda:</p>
+
+                        <div className="grid grid-cols-2 gap-3 mb-6">
+                            <button
+                                onClick={() => {
+                                    addToCart(selectedPerfume);
+                                    closeModal();
+                                }}
+                                className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all group"
+                            >
+                                <span className="text-2xl mb-2 group-hover:scale-110 transition-transform">🧴</span>
+                                <span className="font-bold text-slate-700">Frasco Inteiro</span>
+                                <span className="text-xs text-slate-400">$ {selectedPerfume.price.toFixed(2)}</span>
+                            </button>
+
+                            <button
+                                onClick={() => {
+                                    // Just focus input, UI shows inputs below
+                                }}
+                                className="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-indigo-500 bg-indigo-50 transition-all shadow-sm"
+                            >
+                                <span className="text-2xl mb-2">🧪</span>
+                                <span className="font-bold text-indigo-700">Decant / mL</span>
+                                <span className="text-xs text-indigo-400">Personalizado</span>
+                            </button>
+                        </div>
+
+                        <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase">Volume (mL)</label>
+                                <input
+                                    type="number"
+                                    value={decantVolume}
+                                    onChange={(e) => setDecantVolume(e.target.value)}
+                                    className="w-full mt-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    placeholder="Ex: 10"
+                                    autoFocus
+                                />
+                                <div className="text-right mt-1">
+                                    <span className="text-[10px] text-slate-400">
+                                        Custo aprox: $ {selectedPerfume.volumeML ? ((selectedPerfume.cost / selectedPerfume.volumeML) * (parseFloat(decantVolume) || 0)).toFixed(2) : '-'}
+                                    </span>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase">Preço de Venda ($)</label>
+                                <input
+                                    type="number"
+                                    value={decantPrice}
+                                    onChange={(e) => setDecantPrice(e.target.value)}
+                                    className="w-full mt-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    placeholder="Ex: 35.00"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            <button
+                                onClick={closeModal}
+                                className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-100 rounded-lg transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={handleAddDecant}
+                                className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
+                            >
+                                Adicionar
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -198,17 +373,18 @@ export function POS() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {items.map(item => {
                             const stock = item.quantity || 0;
-                            const inCart = cart.find(c => c.id === item.id)?.quantity || 0;
+                            // For unit items, check cart quantity. For perfumes, basic check (more complex avail check in modal)
+                            const inCart = cart.filter(c => c.id === item.id && !c.isDecant).reduce((acc, c) => acc + c.quantity, 0);
                             const available = stock - inCart;
 
                             return (
                                 <button
                                     key={item.id}
-                                    onClick={() => addToCart(item)}
-                                    disabled={available <= 0}
+                                    onClick={() => handleItemClick(item)}
+                                    // disabled={available <= 0} // Allow clicking for perfumes to check residual
                                     className={`
                                         card p-3 flex flex-col items-center gap-2 transition-all text-left group relative
-                                        ${available <= 0 ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:border-indigo-500'}
+                                        ${available <= 0 && item.type !== 'perfume' ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:border-indigo-500'}
                                     `}
                                 >
                                     <div className="w-full aspect-square bg-slate-50 rounded-md overflow-hidden border border-slate-200 group-hover:border-indigo-200 transition-colors relative">
@@ -222,7 +398,11 @@ export function POS() {
 
                                         {/* Stock Badge Overlay */}
                                         <div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[10px] font-bold py-1 text-center backdrop-blur-sm">
-                                            {stock} em Estoque
+                                            {item.type === 'perfume' ? (
+                                                <span>{stock} Frascos {item.residualVolume ? `+ ${item.residualVolume}mL` : ''}</span>
+                                            ) : (
+                                                <span>{stock} em Estoque</span>
+                                            )}
                                         </div>
                                     </div>
 
@@ -235,7 +415,7 @@ export function POS() {
                                         )}
                                         <div className="flex justify-between items-center">
                                             <div className="text-indigo-600 font-bold">$ {item.price.toFixed(2)}</div>
-                                            {available <= 0 && <span className="text-[10px] font-bold text-red-500 uppercase">Esgotado</span>}
+                                            {available <= 0 && item.type !== 'perfume' && <span className="text-[10px] font-bold text-red-500 uppercase">Esgotado</span>}
                                         </div>
                                     </div>
                                 </button>
@@ -267,16 +447,22 @@ export function POS() {
                             <p>Carrinho vazio</p>
                         </div>
                     )}
-                    {cart.map(item => (
-                        <div key={item.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
+                    {cart.map((item, idx) => (
+                        <div key={`${item.id}-${idx}`} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100">
                             <div className="flex flex-col">
                                 <span className="font-medium text-slate-700 truncate max-w-[120px]">{item.name}</span>
-                                <span className="text-xs text-slate-500">$ {item.price.toFixed(2)} x {item.quantity}</span>
+                                <span className="text-xs text-slate-500">
+                                    {item.isDecant ? (
+                                        <span className="text-indigo-500 font-bold">Decant {item.volumeSold}mL</span>
+                                    ) : (
+                                        <span>$ {item.price.toFixed(2)} x {item.quantity}</span>
+                                    )}
+                                </span>
                             </div>
                             <div className="flex items-center gap-3">
                                 <span className="font-bold text-slate-700">$ {(item.price * item.quantity).toFixed(2)}</span>
                                 <button
-                                    onClick={() => removeFromCart(item.id!)}
+                                    onClick={() => removeFromCart(idx)}
                                     className="w-6 h-6 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors"
                                 >
                                     -

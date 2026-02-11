@@ -21,8 +21,13 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
     const [cost, setCost] = useState('');
     const [quantity, setQuantity] = useState('0'); // Stock
     const [brandName, setBrandName] = useState(''); // Brand
-    const [image, setImage] = useState<string | null>(null);
-    const [lowStockThreshold, setLowStockThreshold] = useState<number | undefined>(undefined);
+    const [image, setImage] = useState<string | null>(initialData?.image || null);
+    const [lowStockThreshold, setLowStockThreshold] = useState<number | undefined>(initialData?.lowStockThreshold);
+
+    // New Fields for Perfumes
+    const [type, setType] = useState<'unit' | 'perfume'>(initialData?.type || 'unit');
+    const [volumeML, setVolumeML] = useState(initialData?.volumeML?.toString() || '');
+
     const [loading, setLoading] = useState(false);
 
     // Fetch brands for selection (Firestore)
@@ -44,6 +49,8 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
             setBrandName(initialData.brandName || '');
             setImage(initialData.image || null);
             setLowStockThreshold(initialData.lowStockThreshold);
+            setType(initialData.type || 'unit');
+            setVolumeML(initialData.volumeML?.toString() || '');
         } else {
             // Reset if switching to add mode
             setName('');
@@ -53,6 +60,8 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
             setBrandName('');
             setImage(null);
             setLowStockThreshold(undefined);
+            setType('unit');
+            setVolumeML('');
         }
     }, [initialData]);
 
@@ -116,7 +125,7 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
 
         setLoading(true);
         try {
-            const itemData = {
+            const itemData: any = {
                 name: name.trim(),
                 price: parsedPrice,
                 cost: parsedCost,
@@ -124,8 +133,19 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
                 brandName: brandName || undefined,
                 image: image || undefined,
                 lowStockThreshold: lowStockThreshold !== undefined ? Number(lowStockThreshold) : undefined,
+                type,
                 userEmail: user.email
             };
+
+            if (type === 'perfume') {
+                itemData.volumeML = parseFloat(volumeML) || 0;
+                // Initialize residualVolume if new item or not present
+                if (!initialData || initialData.residualVolume === undefined) {
+                    itemData.residualVolume = 0;
+                } else {
+                    itemData.residualVolume = initialData.residualVolume;
+                }
+            }
 
             if (initialData && initialData.id) {
                 await db.items.update(initialData.id, itemData);
@@ -141,6 +161,8 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
                 setBrandName('');
                 setImage(null);
                 setLowStockThreshold(undefined);
+                setType('unit');
+                setVolumeML('');
             }
 
             if (onComplete) onComplete();
@@ -226,6 +248,38 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
                     </div>
                 </div>
 
+                {/* Product Type Selector */}
+                <div className="flex gap-4 mb-2">
+                    <label className={`flex-1 cursor-pointer border rounded-lg p-3 flex items-center gap-3 transition-colors ${type === 'unit' ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                        <input
+                            type="radio"
+                            name="type"
+                            value="unit"
+                            checked={type === 'unit'}
+                            onChange={() => setType('unit')}
+                            className="text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <div>
+                            <span className="block font-medium text-slate-700">Produto Comum</span>
+                            <span className="text-xs text-slate-500">Venda por unidade</span>
+                        </div>
+                    </label>
+                    <label className={`flex-1 cursor-pointer border rounded-lg p-3 flex items-center gap-3 transition-colors ${type === 'perfume' ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                        <input
+                            type="radio"
+                            name="type"
+                            value="perfume"
+                            checked={type === 'perfume'}
+                            onChange={() => setType('perfume')}
+                            className="text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <div>
+                            <span className="block font-medium text-slate-700">Perfume / Decant</span>
+                            <span className="text-xs text-slate-500">Venda frasco ou mL</span>
+                        </div>
+                    </label>
+                </div>
+
                 <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 flex flex-col gap-4">
                     <div className="flex justify-between items-center">
                         <div className="flex flex-col">
@@ -253,9 +307,33 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
                     )}
                 </div>
 
+                {type === 'perfume' && (
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4 animate-in fade-in slide-in-from-top-2">
+                        <h4 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                            🧪 Configuração do Perfume
+                        </h4>
+                        <div className="grid grid-cols-2 gap-4">
+                            <Input
+                                label="Volume do Frasco (mL)"
+                                type="number"
+                                value={volumeML}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVolumeML(e.target.value)}
+                                placeholder="Ex: 100"
+                                required={type === 'perfume'}
+                            />
+                            <div className="flex flex-col justify-end pb-2">
+                                <span className="text-xs text-slate-500 font-medium uppercase mb-1">Custo por mL (Estimado)</span>
+                                <div className="text-lg font-mono font-bold text-slate-700">
+                                    {volumeML && cost ? `$ ${(parseFloat(cost) / parseFloat(volumeML)).toFixed(2)} / mL` : '-'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-4">
                     <Input
-                        label="Estoque (Qtd)"
+                        label={type === 'perfume' ? "Frascos em Estoque" : "Quantidade em Estoque"}
                         type="number"
                         value={quantity}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuantity(e.target.value)}
@@ -263,7 +341,7 @@ export function ItemForm({ onComplete, initialData, onCancel }: ItemFormProps) {
                         placeholder="0"
                     />
                     <Input
-                        label="Preço de Custo ($)"
+                        label="Preço de Custo Total ($)"
                         type="number"
                         step="0.01"
                         value={cost}
